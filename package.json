@@ -1,0 +1,18 @@
+{
+  "name": "echoshift",
+  "version": "0.2.0",
+  "private": true,
+  "description": "EchoShift \u2014 temporal stealth platformer, V0.2 visual polish build.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.5"
+  }
+}
