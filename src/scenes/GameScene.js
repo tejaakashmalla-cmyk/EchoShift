@@ -1,2862 +1,1777 @@
-﻿import Phaser from "phaser";
+﻿export default class GameScene extends Phaser.Scene {
+    constructor() {
+        super("GameScene");
 
-const LEVEL = {
-  width: 4200,
-  height: 720,
-  spawn: { x: 130, y: 500 },
+        this.timeline = "PRIME";
+        this.score = 0;
+        this.shards = 0;
+        this.maxHealth = 100;
+        this.health = 100;
+        this.energy = 100;
 
-  platforms: {
-    prime: [
-      [0,650,850],[980,560,380],[1450,650,520],
-      [2070,520,330],[2520,620,430],[3100,500,420],
-      [3650,620,500],[760,510,120],[1740,470,120]
-    ],
+        this.playerSpeed = 260;
+        this.jumpPower = 520;
 
-    echo: [
-      [0,650,500],[610,560,340],[1120,620,260],
-      [1510,520,360],[2010,650,440],[2470,510,260],
-      [2860,610,420],[3340,560,300],[3820,460,330],
-      [900,430,110],[2250,430,120]
-    ]
-  },
+        this.bullets = null;
+        this.enemyBullets = null;
+        this.enemies = null;
+        this.shardsGroup = null;
 
-  enemies: {
-    prime: [
-      [700,450],
-      [1700,410],
-      [2760,560],
-      [3440,420]
-    ],
+        this.lastShot = 0;
+        this.lastShift = 0;
+        this.gameOverState = false;
+    }
 
-    echo: [
-      [820,600],
-      [1260,520],
-      [2330,460],
-      [3200,520],
-      [3960,380]
-    ]
-  },
+    create() {
+        // --------------------------------------------------
+        // WORLD
+        // --------------------------------------------------
 
-  crystals: {
-    prime: [
-      [420,590],[1160,500],[1620,590],
-      [2210,460],[2670,560],[3250,440]
-    ],
+        this.cameras.main.setBackgroundColor("#07111f");
 
-    echo: [
-      [250,590],[760,500],[1290,560],
-      [1690,460],[2610,450],[3440,500],[3970,400]
-    ]
-  }
-};
+        this.createBackground();
+        this.createPlatforms();
 
-export default class GameScene extends Phaser.Scene {
+        // --------------------------------------------------
+        // PLAYER
+        // --------------------------------------------------
 
-  constructor() {
-    super("GameScene");
-  }
+        this.player = this.physics.add.sprite(
+            180,
+            400,
+            "player"
+        );
 
-  create() {
+        this.player.setScale(0.8);
+        this.player.setCollideWorldBounds(true);
+        this.player.body.setSize(28, 48);
+        this.player.body.setOffset(10, 8);
 
-    // -----------------------------
-    // GAME STATE
-    // -----------------------------
+        // --------------------------------------------------
+        // GROUPS
+        // --------------------------------------------------
 
-    this.timeline = "prime";
+        this.bullets = this.physics.add.group({
+            defaultKey: "bullet",
+            maxSize: 30
+        });
 
-    this.score = 0;
-    this.collected = 0;
+        this.enemyBullets = this.physics.add.group({
+            defaultKey: "enemyBullet",
+            maxSize: 50
+        });
 
-    this.health = 3;
-    this.maxHealth = 3;
+        this.enemies = this.physics.add.group();
 
-    this.energy = 100;
-    this.maxEnergy = 100;
+        this.shardsGroup = this.physics.add.group();
 
-    this.shiftCooldown = 0;
-    this.invulnerableUntil = 0;
+        // --------------------------------------------------
+        // COLLISIONS
+        // --------------------------------------------------
 
-    this.levelStart = performance.now();
+        this.physics.add.collider(
+            this.player,
+            this.platforms
+        );
 
-    this.lastTrail = 0;
-    this.lastFootstep = 0;
-    this.lastShot = 0;
+        this.physics.add.collider(
+            this.enemies,
+            this.platforms
+        );
 
-    this.facing = 1;
+        this.physics.add.collider(
+            this.bullets,
+            this.platforms,
+            this.destroyBullet,
+            null,
+            this
+        );
 
-    // -----------------------------
-    // WORLD
-    // -----------------------------
+        this.physics.add.collider(
+            this.enemyBullets,
+            this.platforms,
+            this.destroyBullet,
+            null,
+            this
+        );
 
-    this.createPlayer();
-    this.createWorld();
-    this.createEcho();
+        this.physics.add.overlap(
+            this.bullets,
+            this.enemies,
+            this.hitEnemy,
+            null,
+            this
+        );
 
-    this.createCombatAssets();
+        this.physics.add.overlap(
+            this.player,
+            this.enemyBullets,
+            this.hitPlayer,
+            null,
+            this
+        );
 
-    this.createCollectibles();
-    this.createEnemies();
+        this.physics.add.overlap(
+            this.player,
+            this.enemies,
+            this.enemyContact,
+            null,
+            this
+        );
 
-    this.createExit();
-    this.createDecor();
+        this.physics.add.overlap(
+            this.player,
+            this.shardsGroup,
+            this.collectShard,
+            null,
+            this
+        );
 
-    this.createHUD();
-    this.createInput();
-    this.setupAudio();
+        // --------------------------------------------------
+        // INPUT
+        // --------------------------------------------------
 
-    // -----------------------------
-    // CAMERA
-    // -----------------------------
+        this.cursors = this.input.keyboard.createCursorKeys();
 
-    this.cameras.main.setBounds(
-      0,
-      0,
-      LEVEL.width,
-      LEVEL.height
-    );
+        this.keys = this.input.keyboard.addKeys({
+            W: Phaser.Input.Keyboard.KeyCodes.W,
+            A: Phaser.Input.Keyboard.KeyCodes.A,
+            D: Phaser.Input.Keyboard.KeyCodes.D,
+            E: Phaser.Input.Keyboard.KeyCodes.E,
+            F: Phaser.Input.Keyboard.KeyCodes.F,
+            R: Phaser.Input.Keyboard.KeyCodes.R
+        });
 
-    this.cameras.main.startFollow(
-      this.player,
-      true,
-      .075,
-      .075
-    );
+        this.input.on(
+            "pointerdown",
+            () => {
+                this.shoot();
+            }
+        );
 
-    this.cameras.main.setDeadzone(300, 140);
+        // --------------------------------------------------
+        // LEVEL OBJECTS
+        // --------------------------------------------------
 
-    // -----------------------------
-    // SHIFT EFFECT
-    // -----------------------------
+        this.createEnemies();
+        this.createShards();
+        this.createExtraction();
 
-    this.transitionOverlay =
-      this.add.rectangle(
-        0,
-        0,
-        1280,
-        720,
-        0x66e3ff,
-        0
-      )
-      .setScrollFactor(0)
-      .setDepth(100);
-  }
+        // --------------------------------------------------
+        // CAMERA
+        // --------------------------------------------------
 
-  // ============================================================
-  // PLAYER
-  // ============================================================
+        this.cameras.main.startFollow(
+            this.player,
+            true,
+            0.08,
+            0.08
+        );
 
-  createPlayer() {
+        this.cameras.main.setBounds(
+            0,
+            0,
+            5000,
+            720
+        );
 
-    this.player =
-      this.physics.add.sprite(
-        LEVEL.spawn.x,
-        LEVEL.spawn.y,
-        "player"
-      );
+        // --------------------------------------------------
+        // HUD
+        // --------------------------------------------------
 
-    this.player
-      .setSize(22, 38)
-      .setOffset(7, 3)
-      .setCollideWorldBounds(true)
-      .setDragX(900)
-      .setMaxVelocity(330, 900)
-      .setDepth(10);
-  }
+        this.createHUD();
 
-  // ============================================================
-  // WORLD
-  // ============================================================
+        // --------------------------------------------------
+        // FX
+        // --------------------------------------------------
 
-  createWorld() {
+        this.createRain();
 
-    const bg =
-      this.add.graphics()
-        .setDepth(-30);
-
-    bg.fillGradientStyle(
-      0x070a14,
-      0x0d1425,
-      0x04060d,
-      0x07171b,
-      1
-    );
-
-    bg.fillRect(
-      0,
-      0,
-      LEVEL.width,
-      LEVEL.height
-    );
-
-    this.parallaxFar =
-      this.add.graphics()
-        .setDepth(-25);
-
-    this.parallaxMid =
-      this.add.graphics()
-        .setDepth(-24);
-
-    this.drawSkyline(
-      this.parallaxFar,
-      0x0b1120,
-      0.55,
-      40,
-      210,
-      105
-    );
-
-    this.drawSkyline(
-      this.parallaxMid,
-      0x101a2d,
-      0.8,
-      70,
-      260,
-      125
-    );
-
-    this.scanlines =
-      this.add.graphics()
-        .setDepth(-5);
-
-    for (
-      let y = 0;
-      y < 720;
-      y += 5
-    ) {
-
-      this.scanlines
-        .lineStyle(
-          1,
-          0xffffff,
-          0.012
-        )
-        .lineBetween(
-          0,
-          y,
-          LEVEL.width,
-          y
+        this.showTimelineMessage(
+            "PRIME TIMELINE",
+            "#53d8ff"
         );
     }
 
-    this.primeGroup =
-      this.physics.add.staticGroup();
+    // ======================================================
+    // BACKGROUND
+    // ======================================================
 
-    this.echoGroup =
-      this.physics.add.staticGroup();
-
-    this.buildPlatforms(
-      this.primeGroup,
-      LEVEL.platforms.prime,
-      0x344768
-    );
-
-    this.buildPlatforms(
-      this.echoGroup,
-      LEVEL.platforms.echo,
-      0x1c4e57
-    );
-
-    this.echoGroup.setVisible(false);
-
-    this.physics.add.collider(
-      this.player,
-      this.primeGroup,
-      null,
-      () => this.timeline === "prime",
-      this
-    );
-
-    this.physics.add.collider(
-      this.player,
-      this.echoGroup,
-      null,
-      () => this.timeline === "echo",
-      this
-    );
-  }
-
-  drawSkyline(
-    graphics,
-    tint,
-    alpha,
-    minHeight,
-    maxHeight,
-    step
-  ) {
-
-    for (
-      let x = 0;
-      x < LEVEL.width;
-      x += step
-    ) {
-
-      const height =
-        Phaser.Math.Between(
-          minHeight,
-          maxHeight
+    createBackground() {
+        this.add.rectangle(
+            2500,
+            360,
+            5000,
+            720,
+            0x07111f
         );
 
-      const width =
-        Phaser.Math.Between(
-          step - 35,
-          step - 8
-        );
-
-      graphics
-        .fillStyle(
-          tint,
-          alpha
-        )
-        .fillRect(
-          x,
-          650 - height,
-          width,
-          height
-        );
-
-      if (width > 65) {
-
-        graphics
-          .fillStyle(
-            0x5b7092,
-            alpha * 0.25
-          );
-
-        for (
-          let y = 650 - height + 24;
-          y < 630;
-          y += 28
-        ) {
-
-          graphics.fillRect(
-            x + 14,
-            y,
-            4,
-            3
-          );
-        }
-      }
-    }
-  }
-
-  buildPlatforms(
-    group,
-    list,
-    tint
-  ) {
-
-    list.forEach(
-      ([x, y, width]) => {
-
-        const platform =
-          this.add.image(
-            x + width / 2,
-            y + 12,
-            "platform"
-          );
-
-        platform
-          .setDisplaySize(
-            width,
-            24
-          )
-          .setTint(tint)
-          .setDepth(2);
-
-        group.add(platform);
-      }
-    );
-  }
-
-  // ============================================================
-  // TEMPORAL ECHO
-  // ============================================================
-
-  createEcho() {
-
-    this.echo =
-      this.physics.add.sprite(
-        this.player.x - 70,
-        this.player.y,
-        "echo"
-      );
-
-    this.echo
-      .setAlpha(0.36)
-      .setDepth(8);
-
-    this.echo.body.allowGravity = false;
-    this.echo.body.immovable = true;
-  }
-
-  // ============================================================
-  // COMBAT ASSETS
-  // ============================================================
-
-  createCombatAssets() {
-
-    const graphics =
-      this.make.graphics({
-        x: 0,
-        y: 0,
-        add: false
-      });
-
-    // PLAYER BULLET
-
-    graphics.clear();
-
-    graphics.fillStyle(
-      0xd9ff5f,
-      1
-    );
-
-    graphics.fillCircle(
-      8,
-      4,
-      4
-    );
-
-    graphics.generateTexture(
-      "playerBullet",
-      16,
-      8
-    );
-
-    // ENEMY BULLET
-
-    graphics.clear();
-
-    graphics.fillStyle(
-      0xff5578,
-      1
-    );
-
-    graphics.fillCircle(
-      8,
-      4,
-      4
-    );
-
-    graphics.generateTexture(
-      "enemyBullet",
-      16,
-      8
-    );
-
-    graphics.destroy();
-  }
-
-  // ============================================================
-  // COLLECTIBLES
-  // ============================================================
-
-  createCollectibles() {
-
-    this.crystalsPrime =
-      this.physics.add.group();
-
-    this.crystalsEcho =
-      this.physics.add.group();
-
-    this.populateCrystals(
-      this.crystalsPrime,
-      LEVEL.crystals.prime,
-      "prime"
-    );
-
-    this.populateCrystals(
-      this.crystalsEcho,
-      LEVEL.crystals.echo,
-      "echo"
-    );
-
-    this.physics.add.overlap(
-      this.player,
-      this.crystalsPrime,
-      (_, crystal) =>
-        this.collectCrystal(crystal),
-      () => this.timeline === "prime",
-      this
-    );
-
-    this.physics.add.overlap(
-      this.player,
-      this.crystalsEcho,
-      (_, crystal) =>
-        this.collectCrystal(crystal),
-      () => this.timeline === "echo",
-      this
-    );
-  }
-
-  populateCrystals(
-    group,
-    list,
-    timeline
-  ) {
-
-    list.forEach(
-      ([x, y]) => {
-
-        const crystal =
-          group.create(
-            x,
-            y,
-            "crystal"
-          );
-
-        crystal.body.allowGravity = false;
-
-        crystal.body.setCircle(
-          12,
-          4,
-          4
-        );
-
-        crystal.setData(
-          "timeline",
-          timeline
-        );
-
-        crystal.setData(
-          "baseY",
-          y
-        );
-
-        crystal
-          .setVisible(
-            timeline === this.timeline
-          )
-          .setDepth(7);
-      }
-    );
-  }
-
-  // ============================================================
-  // ENEMY SYSTEM
-  // ============================================================
-
-  createEnemies() {
-
-    this.enemiesPrime =
-      this.physics.add.group();
-
-    this.enemiesEcho =
-      this.physics.add.group();
-
-    this.populateEnemies(
-      this.enemiesPrime,
-      LEVEL.enemies.prime,
-      "prime"
-    );
-
-    this.populateEnemies(
-      this.enemiesEcho,
-      LEVEL.enemies.echo,
-      "echo"
-    );
-
-    // PLAYER VS ENEMY
-
-    this.physics.add.overlap(
-      this.player,
-      this.enemiesPrime,
-      (_, enemy) =>
-        this.enemyContact(enemy),
-      () => this.timeline === "prime",
-      this
-    );
-
-    this.physics.add.overlap(
-      this.player,
-      this.enemiesEcho,
-      (_, enemy) =>
-        this.enemyContact(enemy),
-      () => this.timeline === "echo",
-      this
-    );
-
-    // BULLETS VS ENEMIES
-
-    this.physics.add.overlap(
-      this.playerBullets,
-      this.enemiesPrime,
-      (bullet, enemy) =>
-        this.hitEnemy(bullet, enemy),
-      () => this.timeline === "prime",
-      this
-    );
-
-    this.physics.add.overlap(
-      this.playerBullets,
-      this.enemiesEcho,
-      (bullet, enemy) =>
-        this.hitEnemy(bullet, enemy),
-      () => this.timeline === "echo",
-      this
-    );
-  }
-
-  populateEnemies(
-    group,
-    list,
-    timeline
-  ) {
-
-    list.forEach(
-      ([x, y], index) => {
-
-        const enemy =
-          group.create(
-            x,
-            y,
-            "drone"
-          );
-
-        enemy.body.allowGravity = false;
-
-        enemy.setDepth(7);
-
-        enemy.setData(
-          "timeline",
-          timeline
-        );
-
-        enemy.setData(
-          "originX",
-          x
-        );
-
-        enemy.setData(
-          "originY",
-          y
-        );
-
-        enemy.setData(
-          "phase",
-          index * 1.7
-        );
-
-        enemy.setData(
-          "health",
-          3
-        );
-
-        enemy.setData(
-          "maxHealth",
-          3
-        );
-
-        enemy.setData(
-          "state",
-          "patrol"
-        );
-
-        enemy.setData(
-          "lastAttack",
-          0
-        );
-
-        enemy.setData(
-          "speed",
-          70 + index * 7
-        );
-
-        enemy.setData(
-          "hitFlash",
-          0
-        );
-
-        enemy.setVisible(
-          timeline === this.timeline
-        );
-
-        // tiny health bar
-
-        enemy.healthBack =
-          this.add.rectangle(
-            x,
-            y - 27,
-            34,
-            4,
-            0x182033,
-            0.9
-          )
-          .setDepth(20)
-          .setVisible(
-            timeline === this.timeline
-          );
-
-        enemy.healthFill =
-          this.add.rectangle(
-            x,
-            y - 27,
-            34,
-            4,
-            0xff5578,
-            1
-          )
-          .setDepth(21)
-          .setVisible(
-            timeline === this.timeline
-          );
-
-        enemy.healthBack.setOrigin(
-          0.5,
-          0.5
-        );
-
-        enemy.healthFill.setOrigin(
-          0.5,
-          0.5
-        );
-      }
-    );
-  }
-
-  // ============================================================
-  // ENEMY AI
-  // ============================================================
-
-  updateEnemies(time) {
-
-    const activeGroup =
-      this.timeline === "prime"
-        ? this.enemiesPrime
-        : this.enemiesEcho;
-
-    activeGroup.children.iterate(
-      enemy => {
-
-        if (!enemy || !enemy.active)
-          return;
-
-        const distance =
-          Phaser.Math.Distance.Between(
-            enemy.x,
-            enemy.y,
-            this.player.x,
-            this.player.y
-          );
-
-        const detectionRange = 360;
-
-        // -------------------------
-        // PATROL
-        // -------------------------
-
-        if (
-          distance >
-          detectionRange
-        ) {
-
-          enemy.setData(
-            "state",
-            "patrol"
-          );
-
-          const originX =
-            enemy.getData(
-              "originX"
+        // Far skyline
+        for (let x = 0; x < 5000; x += 100) {
+            const height = Phaser.Math.Between(
+                80,
+                220
             );
 
-          const phase =
-            enemy.getData(
-              "phase"
+            const building = this.add.rectangle(
+                x,
+                650 - height / 2,
+                70,
+                height,
+                0x10243a
             );
 
-          enemy.x =
-            originX +
-            Math.sin(
-              time * 0.0012 +
-              phase
-            ) * 85;
-
-          enemy.y =
-            enemy.getData(
-              "originY"
-            ) +
-            Math.cos(
-              time * 0.0017 +
-              phase
-            ) * 28;
-
-          enemy.rotation += 0.012;
-
+            building.setScrollFactor(0.25);
         }
 
-        // -------------------------
-        // CHASE
-        // -------------------------
-
-        else if (
-          distance > 150
-        ) {
-
-          enemy.setData(
-            "state",
-            "chase"
-          );
-
-          const direction =
-            this.player.x > enemy.x
-              ? 1
-              : -1;
-
-          enemy.x +=
-            direction *
-            enemy.getData(
-              "speed"
-            ) *
-            0.016;
-
-          enemy.y =
-            Phaser.Math.Linear(
-              enemy.y,
-              this.player.y,
-              0.02
+        // Mid skyline
+        for (let x = 0; x < 5000; x += 150) {
+            const height = Phaser.Math.Between(
+                120,
+                300
             );
 
-          enemy.setTint(
-            0xff8299
-          );
+            const building = this.add.rectangle(
+                x,
+                650 - height / 2,
+                100,
+                height,
+                0x152e49
+            );
+
+            building.setScrollFactor(0.45);
         }
 
-        // -------------------------
-        // ATTACK
-        // -------------------------
+        // Moon
+        const moon = this.add.circle(
+            4200,
+            120,
+            55,
+            0xa7e8ff,
+            0.7
+        );
 
-        else {
-
-          enemy.setData(
-            "state",
-            "attack"
-          );
-
-          enemy.clearTint();
-
-          const lastAttack =
-            enemy.getData(
-              "lastAttack"
-            );
-
-          if (
-            time -
-              lastAttack >
-            1100
-          ) {
-
-            enemy.setData(
-              "lastAttack",
-              time
-            );
-
-            this.enemyShoot(
-              enemy
-            );
-          }
-        }
-
-        // -------------------------
-        // HEALTH BAR
-        // -------------------------
-
-        if (
-          enemy.healthBack &&
-          enemy.healthFill
-        ) {
-
-          enemy.healthBack.x =
-            enemy.x;
-
-          enemy.healthBack.y =
-            enemy.y - 27;
-
-          enemy.healthFill.x =
-            enemy.x;
-
-          enemy.healthFill.y =
-            enemy.y - 27;
-
-          const health =
-            enemy.getData(
-              "health"
-            );
-
-          const max =
-            enemy.getData(
-              "maxHealth"
-            );
-
-          enemy.healthFill.scaleX =
-            Math.max(
-              0,
-              health / max
-            );
-
-          enemy.healthBack.setVisible(
-            enemy.visible
-          );
-
-          enemy.healthFill.setVisible(
-            enemy.visible
-          );
-        }
-      }
-    );
-  }
-
-  // ============================================================
-  // PLAYER SHOOTING
-  // ============================================================
-
-  shoot() {
-
-    const now =
-      performance.now();
-
-    // fire rate
-
-    if (
-      now - this.lastShot <
-      180
-    ) {
-      return;
+        moon.setScrollFactor(0.15);
     }
 
-    // energy cost
+    // ======================================================
+    // PLATFORMS
+    // ======================================================
 
-    if (
-      this.energy <
-      10
-    ) {
-      this.tone(
-        70,
-        0.05,
-        "square",
-        0.012
-      );
+    createPlatforms() {
+        this.platforms = this.physics.add.staticGroup();
 
-      return;
+        // Ground
+        this.createPlatform(
+            2500,
+            690,
+            5000,
+            60
+        );
+
+        // Platforms
+        const platforms = [
+            [450, 560, 300, 25],
+            [900, 470, 260, 25],
+            [1300, 580, 300, 25],
+            [1700, 430, 280, 25],
+            [2100, 520, 300, 25],
+            [2550, 400, 280, 25],
+            [3000, 540, 300, 25],
+            [3450, 450, 300, 25],
+            [3900, 350, 300, 25],
+            [4350, 500, 350, 25]
+        ];
+
+        platforms.forEach(
+            ([x, y, width, height]) => {
+                this.createPlatform(
+                    x,
+                    y,
+                    width,
+                    height
+                );
+            }
+        );
     }
 
-    this.lastShot =
-      now;
-
-    this.energy -= 10;
-
-    const bullet =
-      this.playerBullets.create(
-        this.player.x +
-          this.facing * 25,
-        this.player.y,
-        "playerBullet"
-      );
-
-    bullet.body.allowGravity =
-      false;
-
-    bullet.setVelocityX(
-      this.facing * 760
-    );
-
-    bullet.setDepth(12);
-
-    bullet.setData(
-      "born",
-      now
-    );
-
-    bullet.setData(
-      "timeline",
-      this.timeline
-    );
-
-    bullet.setTint(
-      this.timeline === "prime"
-        ? 0xd9ff5f
-        : 0x66e3ff
-    );
-
-    this.tone(
-      520,
-      0.055,
-      "square",
-      0.018
-    );
-
-    this.createMuzzleFlash();
-  }
-
-  createMuzzleFlash() {
-
-    const flash =
-      this.add.circle(
-        this.player.x +
-          this.facing * 27,
-        this.player.y,
-        6,
-        this.timeline === "prime"
-          ? 0xd9ff5f
-          : 0x66e3ff,
-        0.9
-      )
-      .setDepth(15);
-
-    this.tweens.add({
-      targets: flash,
-      scale: 2.5,
-      alpha: 0,
-      duration: 90,
-      onComplete: () =>
-        flash.destroy()
-    });
-  }
-
-  updateBullets() {
-
-    const now =
-      performance.now();
-
-    this.playerBullets.children.iterate(
-      bullet => {
-
-        if (
-          !bullet ||
-          !bullet.active
-        ) {
-          return;
-        }
-
-        if (
-          now -
-            bullet.getData("born") >
-          1000
-        ) {
-
-          bullet.destroy();
-
-          return;
-        }
-
-        if (
-          bullet.x <
-            -100 ||
-          bullet.x >
-            LEVEL.width + 100
-        ) {
-
-          bullet.destroy();
-        }
-      }
-    );
-
-    this.enemyBullets.children.iterate(
-      bullet => {
-
-        if (
-          !bullet ||
-          !bullet.active
-        ) {
-          return;
-        }
-
-        if (
-          now -
-            bullet.getData("born") >
-          2500
-        ) {
-
-          bullet.destroy();
-
-          return;
-        }
-
-        if (
-          Phaser.Math.Distance.Between(
-            bullet.x,
-            bullet.y,
-            this.player.x,
-            this.player.y
-          ) < 20
-        ) {
-
-          bullet.destroy();
-
-          this.damagePlayer();
-        }
-      }
-    );
-  }
-
-  // ============================================================
-  // ENEMY SHOOTING
-  // ============================================================
-
-  enemyShoot(enemy) {
-
-    const direction =
-      this.player.x >
-      enemy.x
-        ? 1
-        : -1;
-
-    const bullet =
-      this.enemyBullets.create(
-        enemy.x +
-          direction * 18,
-        enemy.y,
-        "enemyBullet"
-      );
-
-    bullet.body.allowGravity =
-      false;
-
-    bullet.setVelocityX(
-      direction * 420
-    );
-
-    bullet.setDepth(11);
-
-    bullet.setData(
-      "born",
-      performance.now()
-    );
-
-    bullet.setData(
-      "timeline",
-      this.timeline
-    );
-
-    bullet.setTint(
-      this.timeline === "prime"
-        ? 0xff5578
-        : 0xff8a9e
-    );
-
-    this.tone(
-      180,
-      0.08,
-      "sawtooth",
-      0.012
-    );
-  }
-
-  // ============================================================
-  // DAMAGE ENEMY
-  // ============================================================
-
-  hitEnemy(
-    bullet,
-    enemy
-  ) {
-
-    if (
-      !bullet.active ||
-      !enemy.active
-    ) {
-      return;
-    }
-
-    // prevent cross-timeline damage
-
-    if (
-      bullet.getData(
-        "timeline"
-      ) !==
-      enemy.getData(
-        "timeline"
-      )
-    ) {
-      return;
-    }
-
-    bullet.destroy();
-
-    let health =
-      enemy.getData(
-        "health"
-      );
-
-    health--;
-
-    enemy.setData(
-      "health",
-      health
-    );
-
-    enemy.setTint(
-      0xffffff
-    );
-
-    this.time.delayedCall(
-      80,
-      () => {
-
-        if (
-          enemy.active
-        ) {
-
-          enemy.clearTint();
-        }
-      }
-    );
-
-    this.score += 25;
-
-    this.tone(
-      310,
-      0.07,
-      "triangle",
-      0.018
-    );
-
-    this.createHitEffect(
-      enemy.x,
-      enemy.y
-    );
-
-    if (
-      health <= 0
-    ) {
-
-      this.destroyEnemy(
-        enemy
-      );
-    }
-  }
-
-  destroyEnemy(
-    enemy
-  ) {
-
-    const x =
-      enemy.x;
-
-    const y =
-      enemy.y;
-
-    this.score += 150;
-
-    this.createExplosion(
-      x,
-      y
-    );
-
-    if (
-      enemy.healthBack
-    ) {
-      enemy.healthBack.destroy();
-    }
-
-    if (
-      enemy.healthFill
-    ) {
-      enemy.healthFill.destroy();
-    }
-
-    enemy.destroy();
-
-    this.tone(
-      90,
-      0.18,
-      "sawtooth",
-      0.03
-    );
-  }
-
-  createHitEffect(
-    x,
-    y
-  ) {
-
-    const ring =
-      this.add.circle(
+    createPlatform(
         x,
         y,
-        4,
-        0xffffff,
-        0.9
-      )
-      .setDepth(25);
-
-    this.tweens.add({
-      targets: ring,
-      scale: 3,
-      alpha: 0,
-      duration: 180,
-      onComplete: () =>
-        ring.destroy()
-    });
-  }
-
-  createExplosion(
-    x,
-    y
-  ) {
-
-    for (
-      let i = 0;
-      i < 10;
-      i++
+        width,
+        height
     ) {
-
-      const particle =
-        this.add.circle(
-          x,
-          y,
-          Phaser.Math.Between(
-            2,
-            5
-          ),
-          Phaser.Math.RND.pick([
-            0xff5578,
-            0xffa1b4,
-            0xd9ff5f
-          ]),
-          0.9
-        )
-        .setDepth(25);
-
-      this.tweens.add({
-        targets: particle,
-
-        x:
-          x +
-          Phaser.Math.Between(
-            -70,
-            70
-          ),
-
-        y:
-          y +
-          Phaser.Math.Between(
-            -70,
-            70
-          ),
-
-        alpha: 0,
-
-        duration: Phaser.Math.Between(
-          300,
-          550
-        ),
-
-        onComplete: () =>
-          particle.destroy()
-      });
-    }
-
-    this.cameras.main.shake(
-      120,
-      0.006
-    );
-  }
-
-  // ============================================================
-  // ENEMY CONTACT
-  // ============================================================
-
-  enemyContact(
-    enemy
-  ) {
-
-    if (
-      !enemy.active
-    ) {
-      return;
-    }
-
-    this.damagePlayer();
-  }
-
-  // ============================================================
-  // EXIT
-  // ============================================================
-
-  createExit() {
-
-    this.exit =
-      this.physics.add.staticImage(
-        4100,
-        532,
-        "exit"
-      )
-      .setDepth(5);
-
-    this.exitGlow =
-      this.add.circle(
-        4100,
-        532,
-        68,
-        0x65f4d3,
-        0.025
-      )
-      .setDepth(1);
-
-    this.tweens.add({
-      targets:
-        this.exitGlow,
-
-      scale:
-        1.35,
-
-      alpha:
-        0.06,
-
-      duration:
-        1100,
-
-      yoyo:
-        true,
-
-      repeat:
-        -1
-    });
-
-    this.physics.add.overlap(
-      this.player,
-      this.exit,
-      () =>
-        this.finishLevel(),
-      null,
-      this
-    );
-  }
-
-  // ============================================================
-  // DECOR
-  // ============================================================
-
-  createDecor() {
-
-    this.rain = [];
-
-    for (
-      let i = 0;
-      i < 120;
-      i++
-    ) {
-
-      const line =
-        this.add.rectangle(
-          Phaser.Math.Between(
-            0,
-            LEVEL.width
-          ),
-          Phaser.Math.Between(
-            50,
-            640
-          ),
-          1,
-          Phaser.Math.Between(
-            8,
-            20
-          ),
-          0x66e3ff,
-          Phaser.Math.FloatBetween(
-            0.04,
-            0.12
-          )
+        const platform = this.add.rectangle(
+            x,
+            y,
+            width,
+            height,
+            this.timeline === "PRIME"
+                ? 0x173c5b
+                : 0x42215c
         );
 
-      line.setDepth(-3);
-
-      this.rain.push(
-        line
-      );
-    }
-  }
-
-  // ============================================================
-  // HUD
-  // ============================================================
-
-  createHUD() {
-
-    this.hudPanel =
-      this.add.rectangle(
-        22,
-        20,
-        360,
-        122,
-        0x070b15,
-        0.84
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(50)
-      .setStrokeStyle(
-        1,
-        0x27334a,
-        0.9
-      );
-
-    this.add.text(
-      42,
-      34,
-      "ECHOSHIFT",
-      {
-        fontFamily:
-          "Arial",
-
-        fontSize:
-          13,
-
-        fontStyle:
-          "bold",
-
-        color:
-          "#edf3ff",
-
-        letterSpacing:
-          3
-      }
-    )
-    .setScrollFactor(0)
-    .setDepth(51);
-
-    this.add.text(
-      42,
-      55,
-      "TEMPORAL STEALTH PROTOCOL",
-      {
-        fontFamily:
-          "Arial",
-
-        fontSize:
-          8,
-
-        color:
-          "#62708b",
-
-        letterSpacing:
-          1.6
-      }
-    )
-    .setScrollFactor(0)
-    .setDepth(51);
-
-    this.scoreText =
-      this.add.text(
-        42,
-        76,
-        "00000",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            20,
-
-          color:
-            "#d9ff5f",
-
-          fontStyle:
-            "bold"
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.healthText =
-      this.add.text(
-        132,
-        81,
-        "● ● ●",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            11,
-
-          color:
-            "#ff6d8a"
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.shardText =
-      this.add.text(
-        225,
-        81,
-        "SHARDS 00",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            9,
-
-          color:
-            "#9aa8c0",
-
-          letterSpacing:
-            1
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.energyLabel =
-      this.add.text(
-        42,
-        108,
-        "ENERGY",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            8,
-
-          color:
-            "#6e7d97",
-
-          letterSpacing:
-            1.3
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.energyTrack =
-      this.add.rectangle(
-        94,
-        110,
-        150,
-        4,
-        0x26344c,
-        1
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.energyFill =
-      this.add.rectangle(
-        94,
-        110,
-        150,
-        4,
-        0xd9ff5f,
-        1
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(52);
-
-    this.weaponText =
-      this.add.text(
-        260,
-        105,
-        "F / CLICK  FIRE",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            8,
-
-          color:
-            "#9aa8c0",
-
-          letterSpacing:
-            1
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    // TIMELINE
-
-    this.timelinePill =
-      this.add.rectangle(
-        1010,
-        22,
-        245,
-        66,
-        0x0a101c,
-        0.82
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(50)
-      .setStrokeStyle(
-        1,
-        0x27334a,
-        0.9
-      );
-
-    this.timelineLabel =
-      this.add.text(
-        1030,
-        37,
-        "PRIME TIMELINE",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            12,
-
-          fontStyle:
-            "bold",
-
-          color:
-            "#d9ff5f",
-
-          letterSpacing:
-            1.5
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.timelineHint =
-      this.add.text(
-        1030,
-        58,
-        "E  SHIFT REALITY",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            8,
-
-          color:
-            "#6d7b94",
-
-          letterSpacing:
-            1.3
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.shiftTrack =
-      this.add.rectangle(
-        1030,
-        78,
-        200,
-        3,
-        0x26344c,
-        1
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.shiftFill =
-      this.add.rectangle(
-        1030,
-        78,
-        200,
-        3,
-        0x66e3ff,
-        1
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(52);
-
-    this.objective =
-      this.add.text(
-        1030,
-        98,
-        "REACH EXTRACTION",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            8,
-
-          color:
-            "#66758f",
-
-          letterSpacing:
-            1.2
-        }
-      )
-      .setScrollFactor(0)
-      .setDepth(51);
-
-    this.controlText =
-      this.add.text(
-        640,
-        681,
-        "A / D MOVE    SPACE JUMP    F / CLICK FIRE    E SHIFT    R RESTART",
-        {
-          fontFamily:
-            "Arial",
-
-          fontSize:
-            9,
-
-          color:
-            "#64718a",
-
-          letterSpacing:
-            1.1
-        }
-      )
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(50);
-  }
-
-  // ============================================================
-  // INPUT
-  // ============================================================
-
-  createInput() {
-
-    this.keys =
-      this.input.keyboard.addKeys({
-        left:
-          Phaser.Input.Keyboard.KeyCodes.LEFT,
-
-        right:
-          Phaser.Input.Keyboard.KeyCodes.RIGHT,
-
-        a:
-          Phaser.Input.Keyboard.KeyCodes.A,
-
-        d:
-          Phaser.Input.Keyboard.KeyCodes.D,
-
-        w:
-          Phaser.Input.Keyboard.KeyCodes.W,
-
-        up:
-          Phaser.Input.Keyboard.KeyCodes.UP,
-
-        space:
-          Phaser.Input.Keyboard.KeyCodes.SPACE,
-
-        shift:
-          Phaser.Input.Keyboard.KeyCodes.E,
-
-        fire:
-          Phaser.Input.Keyboard.KeyCodes.F,
-
-        restart:
-          Phaser.Input.Keyboard.KeyCodes.R
-      });
-
-    // BULLET GROUPS
-
-    this.playerBullets =
-      this.physics.add.group({
-        maxSize:
-          40,
-
-        runChildUpdate:
-          false
-      });
-
-    this.enemyBullets =
-      this.physics.add.group({
-        maxSize:
-          40,
-
-        runChildUpdate:
-          false
-      });
-
-    // CLICK TO SHOOT
-
-    this.input.on(
-      "pointerdown",
-      () => {
-
-        this.unlockAudio();
-
-        this.shoot();
-      }
-    );
-  }
-
-  // ============================================================
-  // AUDIO
-  // ============================================================
-
-  setupAudio() {
-
-    this.audioReady =
-      false;
-
-    this.input.once(
-      "pointerdown",
-      () =>
-        this.unlockAudio()
-    );
-
-    this.input.keyboard.once(
-      "keydown",
-      () =>
-        this.unlockAudio()
-    );
-  }
-
-  unlockAudio() {
-
-    if (
-      this.audioReady
-    ) {
-      return;
+        platform.setStrokeStyle(
+            2,
+            this.timeline === "PRIME"
+                ? 0x53d8ff
+                : 0xff5fd7
+        );
+
+        this.physics.add.existing(
+            platform,
+            true
+        );
+
+        this.platforms.add(platform);
+
+        return platform;
     }
 
-    this.audioReady =
-      true;
+    // ======================================================
+    // PLAYER
+    // ======================================================
 
-    try {
+    updatePlayer() {
+        if (
+            !this.player ||
+            this.gameOverState
+        ) {
+            return;
+        }
 
-      this.sound.context.resume();
+        const left =
+            this.cursors.left.isDown ||
+            this.keys.A.isDown;
 
-    } catch (_) {}
-  }
+        const right =
+            this.cursors.right.isDown ||
+            this.keys.D.isDown;
 
-  tone(
-    frequency,
-    duration = 0.08,
-    type = "sine",
-    volume = 0.025
-  ) {
+        if (left) {
+            this.player.setVelocityX(
+                -this.playerSpeed
+            );
 
-    if (
-      !this.audioReady
-    ) {
-      return;
+            this.player.setFlipX(true);
+        } else if (right) {
+            this.player.setVelocityX(
+                this.playerSpeed
+            );
+
+            this.player.setFlipX(false);
+        } else {
+            this.player.setVelocityX(0);
+        }
+
+        const jump =
+            Phaser.Input.Keyboard.JustDown(
+                this.cursors.up
+            ) ||
+            Phaser.Input.Keyboard.JustDown(
+                this.keys.W
+            );
+
+        if (
+            jump &&
+            this.player.body.blocked.down
+        ) {
+            this.player.setVelocityY(
+                -this.jumpPower
+            );
+        }
+
+        if (
+            Phaser.Input.Keyboard.JustDown(
+                this.keys.E
+            )
+        ) {
+            this.shiftTimeline();
+        }
+
+        if (
+            Phaser.Input.Keyboard.JustDown(
+                this.keys.F
+            )
+        ) {
+            this.shoot();
+        }
+
+        // Mouse aiming
+        const pointer =
+            this.input.activePointer;
+
+        if (
+            pointer.isDown &&
+            this.time.now - this.lastShot > 180
+        ) {
+            this.shoot();
+        }
     }
 
-    try {
+    // ======================================================
+    // TIMELINE SHIFT
+    // ======================================================
 
-      const context =
-        this.sound.context;
+    shiftTimeline() {
+        if (
+            this.time.now - this.lastShift <
+            700
+        ) {
+            return;
+        }
 
-      const oscillator =
-        context.createOscillator();
+        if (this.energy < 15) {
+            this.showTimelineMessage(
+                "LOW TEMPORAL ENERGY",
+                "#ffcc55"
+            );
 
-      const gain =
-        context.createGain();
+            return;
+        }
 
-      oscillator.type =
-        type;
+        this.lastShift = this.time.now;
 
-      oscillator.frequency.value =
-        frequency;
+        this.energy -= 15;
 
-      gain.gain.setValueAtTime(
-        volume,
-        context.currentTime
-      );
+        this.timeline =
+            this.timeline === "PRIME"
+                ? "ECHO"
+                : "PRIME";
 
-      gain.gain.exponentialRampToValueAtTime(
-        0.0001,
-        context.currentTime +
-          duration
-      );
+        this.timelineTransition();
 
-      oscillator.connect(
-        gain
-      );
+        this.updateWorldForTimeline();
 
-      gain.connect(
-        context.destination
-      );
+        this.showTimelineMessage(
+            `${this.timeline} TIMELINE`,
+            this.timeline === "PRIME"
+                ? "#53d8ff"
+                : "#ff5fd7"
+        );
 
-      oscillator.start();
-
-      oscillator.stop(
-        context.currentTime +
-          duration
-      );
-
-    } catch (_) {}
-  }
-
-  // ============================================================
-  // UPDATE
-  // ============================================================
-
-  update(
-    time,
-    delta
-  ) {
-
-    if (
-      Phaser.Input.Keyboard.JustDown(
-        this.keys.restart
-      )
-    ) {
-
-      return this.scene.restart();
+        this.updateHUD();
     }
 
-    this.shiftCooldown =
-      Math.max(
-        0,
-        this.shiftCooldown -
-          delta
-      );
+    timelineTransition() {
+        const color =
+            this.timeline === "PRIME"
+                ? 0x53d8ff
+                : 0xff5fd7;
 
-    // ENERGY REGEN
+        const flash =
+            this.add.rectangle(
+                this.cameras.main.scrollX +
+                    this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                color,
+                0.35
+            );
 
-    this.energy =
-      Math.min(
-        this.maxEnergy,
-        this.energy +
-          delta * 0.018
-      );
-
-    this.handleMovement();
-
-    // FIRE
-
-    if (
-      this.keys.fire.isDown
-    ) {
-
-      this.shoot();
-    }
-
-    this.updateEcho();
-
-    this.updateCollectibles(
-      time
-    );
-
-    this.updateEnemies(
-      time
-    );
-
-    this.updateBullets();
-
-    this.updateParallax();
-
-    this.updateRain(
-      time
-    );
-
-    this.updateHUD();
-
-    this.updatePlayerMotion(
-      time
-    );
-
-    if (
-      this.player.y >
-      LEVEL.height + 120
-    ) {
-
-      this.damagePlayer();
-    }
-  }
-
-  // ============================================================
-  // MOVEMENT
-  // ============================================================
-
-  handleMovement() {
-
-    const left =
-      this.keys.left.isDown ||
-      this.keys.a.isDown;
-
-    const right =
-      this.keys.right.isDown ||
-      this.keys.d.isDown;
-
-    if (left) {
-
-      this.player.setAccelerationX(
-        -1350
-      );
-
-      this.facing =
-        -1;
-
-    } else if (right) {
-
-      this.player.setAccelerationX(
-        1350
-      );
-
-      this.facing =
-        1;
-
-    } else {
-
-      this.player.setAccelerationX(
-        0
-      );
-    }
-
-    const grounded =
-      this.player.body.blocked.down ||
-      this.player.body.touching.down;
-
-    if (
-      (
-        this.keys.space.isDown ||
-        this.keys.up.isDown ||
-        this.keys.w.isDown
-      ) &&
-      grounded
-    ) {
-
-      this.player.setVelocityY(
-        -510
-      );
-
-      this.tone(
-        280,
-        0.09,
-        "triangle",
-        0.018
-      );
-    }
-
-    if (
-      Phaser.Input.Keyboard.JustDown(
-        this.keys.shift
-      ) &&
-      this.shiftCooldown <= 0
-    ) {
-
-      this.shiftTimeline();
-    }
-  }
-
-  // ============================================================
-  // PLAYER MOTION
-  // ============================================================
-
-  updatePlayerMotion(
-    time
-  ) {
-
-    const moving =
-      Math.abs(
-        this.player.body.velocity.x
-      ) > 35;
-
-    const grounded =
-      this.player.body.blocked.down ||
-      this.player.body.touching.down;
-
-    if (
-      grounded &&
-      moving
-    ) {
-
-      this.player.y +=
-        Math.sin(
-          time * 0.02
-        ) * 0.12;
-
-      if (
-        time -
-          this.lastTrail >
-        90
-      ) {
-
-        this.lastTrail =
-          time;
-
-        const ghost =
-          this.add.image(
-            this.player.x -
-              this.facing * 5,
-            this.player.y,
-            "echo"
-          )
-          .setAlpha(0.18)
-          .setScale(0.9)
-          .setDepth(4);
+        flash.setScrollFactor(0);
 
         this.tweens.add({
-          targets:
-            ghost,
-
-          alpha:
-            0,
-
-          x:
-            ghost.x -
-            this.facing * 18,
-
-          duration:
-            240,
-
-          onComplete:
-            () =>
-              ghost.destroy()
-        });
-      }
-    }
-
-    if (
-      moving &&
-      grounded &&
-      time -
-        this.lastFootstep >
-        360
-    ) {
-
-      this.lastFootstep =
-        time;
-
-      this.tone(
-        115,
-        0.035,
-        "square",
-        0.008
-      );
-    }
-  }
-
-  // ============================================================
-  // ECHO
-  // ============================================================
-
-  updateEcho() {
-
-    this.echo.x =
-      Phaser.Math.Linear(
-        this.echo.x,
-        this.player.x - 70,
-        0.075
-      );
-
-    this.echo.y =
-      Phaser.Math.Linear(
-        this.echo.y,
-        this.player.y,
-        0.075
-      );
-
-    this.echo.setAlpha(
-      this.timeline === "echo"
-        ? 0.2
-        : 0.42
-    );
-  }
-
-  // ============================================================
-  // COLLECTIBLES
-  // ============================================================
-
-  updateCollectibles(
-    time
-  ) {
-
-    [
-      this.crystalsPrime,
-      this.crystalsEcho
-    ].forEach(
-      group => {
-
-        group.children.iterate(
-          crystal => {
-
-            if (
-              !crystal ||
-              !crystal.active
-            ) {
-              return;
+            targets: flash,
+            alpha: 0,
+            duration: 450,
+            onComplete: () => {
+                flash.destroy();
             }
+        });
 
-            crystal.y =
-              crystal.getData(
-                "baseY"
-              ) +
-              Math.sin(
-                time * 0.004 +
-                crystal.x * 0.02
-              ) * 6;
-
-            crystal.rotation +=
-              0.018;
-          }
+        this.cameras.main.shake(
+            220,
+            0.006
         );
-      }
-    );
-  }
 
-  // ============================================================
-  // PARALLAX
-  // ============================================================
+        // Afterimage
+        const ghost =
+            this.add.sprite(
+                this.player.x,
+                this.player.y,
+                "player"
+            );
 
-  updateParallax() {
+        ghost.setScale(
+            this.player.scaleX,
+            this.player.scaleY
+        );
 
-    const scrollX =
-      this.cameras.main.scrollX;
+        ghost.setTint(color);
+        ghost.setAlpha(0.6);
 
-    this.parallaxFar.x =
-      scrollX * 0.08;
-
-    this.parallaxMid.x =
-      scrollX * 0.18;
-  }
-
-  // ============================================================
-  // RAIN
-  // ============================================================
-
-  updateRain(
-    time
-  ) {
-
-    for (
-      const rain of this.rain
-    ) {
-
-      rain.y += 1.2;
-
-      if (
-        rain.y >
-        680
-      ) {
-
-        rain.y =
-          70;
-      }
-
-      rain.x +=
-        Math.sin(
-          time * 0.0005 +
-          rain.y
-        ) * 0.05;
-    }
-  }
-
-  // ============================================================
-  // TIMELINE SHIFT
-  // ============================================================
-
-  shiftTimeline() {
-
-    this.timeline =
-      this.timeline === "prime"
-        ? "echo"
-        : "prime";
-
-    this.shiftCooldown =
-      950;
-
-    const prime =
-      this.timeline === "prime";
-
-    this.primeGroup.setVisible(
-      prime
-    );
-
-    this.echoGroup.setVisible(
-      !prime
-    );
-
-    this.enemiesPrime.children.iterate(
-      enemy => {
-
-        if (enemy) {
-
-          enemy.setVisible(
-            prime
-          );
-        }
-      }
-    );
-
-    this.enemiesEcho.children.iterate(
-      enemy => {
-
-        if (enemy) {
-
-          enemy.setVisible(
-            !prime
-          );
-        }
-      }
-    );
-
-    this.crystalsPrime.children.iterate(
-      crystal => {
-
-        if (crystal) {
-
-          crystal.setVisible(
-            prime
-          );
-        }
-      }
-    );
-
-    this.crystalsEcho.children.iterate(
-      crystal => {
-
-        if (crystal) {
-
-          crystal.setVisible(
-            !prime
-          );
-        }
-      }
-    );
-
-    this.player.setTint(
-      prime
-        ? 0xd9ff5f
-        : 0x8ef2ff
-    );
-
-    this.timelineLabel.setText(
-      prime
-        ? "PRIME TIMELINE"
-        : "ECHO TIMELINE"
-    );
-
-    this.timelineLabel.setColor(
-      prime
-        ? "#d9ff5f"
-        : "#66e3ff"
-    );
-
-    this.timelinePill.setStrokeStyle(
-      1,
-      prime
-        ? 0x4a5b35
-        : 0x2d6170,
-      0.9
-    );
-
-    this.tone(
-      prime ? 180 : 230,
-      0.14,
-      "sawtooth",
-      0.022
-    );
-
-    this.tone(
-      prime ? 360 : 460,
-      0.22,
-      "sine",
-      0.018
-    );
-
-    this.cameras.main.flash(
-      170,
-      prime ? 217 : 102,
-      prime ? 255 : 227,
-      180
-    );
-
-    this.cameras.main.shake(
-      130,
-      0.004
-    );
-
-    this.transitionOverlay
-      .setFillStyle(
-        prime
-          ? 0xd9ff5f
-          : 0x66e3ff
-      )
-      .setAlpha(
-        0.13
-      );
-
-    this.tweens.add({
-      targets:
-        this.transitionOverlay,
-
-      alpha:
-        0,
-
-      duration:
-        420,
-
-      ease:
-        "Cubic.Out"
-    });
-
-    for (
-      let i = 0;
-      i < 7;
-      i++
-    ) {
-
-      const shard =
-        this.add.image(
-          this.player.x +
-            Phaser.Math.Between(
-              -30,
-              30
-            ),
-          this.player.y +
-            Phaser.Math.Between(
-              -45,
-              35
-            ),
-          "crystal"
-        )
-        .setScale(0.35)
-        .setAlpha(0.65)
-        .setTint(
-          prime
-            ? 0xd9ff5f
-            : 0x66e3ff
-        )
-        .setDepth(20);
-
-      this.tweens.add({
-        targets:
-          shard,
-
-        x:
-          shard.x +
-          Phaser.Math.Between(
-            -80,
-            80
-          ),
-
-        y:
-          shard.y +
-          Phaser.Math.Between(
-            -80,
-            80
-          ),
-
-        alpha:
-          0,
-
-        angle:
-          Phaser.Math.Between(
-            -180,
-            180
-          ),
-
-        duration:
-          500,
-
-        onComplete:
-          () =>
-            shard.destroy()
-      });
+        this.tweens.add({
+            targets: ghost,
+            alpha: 0,
+            scale: 1.3,
+            duration: 500,
+            onComplete: () => {
+                ghost.destroy();
+            }
+        });
     }
 
-    this.score +=
-      10;
-  }
+    updateWorldForTimeline() {
+        const prime =
+            this.timeline === "PRIME";
 
-  // ============================================================
-  // COLLECT
-  // ============================================================
+        this.platforms.children.iterate(
+            platform => {
+                if (!platform) {
+                    return;
+                }
 
-  collectCrystal(
-    crystal
-  ) {
+                platform.setFillStyle(
+                    prime
+                        ? 0x173c5b
+                        : 0x42215c
+                );
 
-    crystal.disableBody(
-      true,
-      true
-    );
+                platform.setStrokeStyle(
+                    2,
+                    prime
+                        ? 0x53d8ff
+                        : 0xff5fd7
+                );
+            }
+        );
 
-    this.collected++;
+        this.enemies.children.iterate(
+            enemy => {
+                if (!enemy) {
+                    return;
+                }
 
-    this.score +=
-      100;
+                enemy.setAlpha(
+                    enemy.timeline ===
+                        this.timeline
+                        ? 1
+                        : 0.15
+                );
+            }
+        );
 
-    this.energy =
-      Math.min(
-        this.maxEnergy,
-        this.energy + 20
-      );
+        this.shardsGroup.children.iterate(
+            shard => {
+                if (!shard) {
+                    return;
+                }
 
-    this.tone(
-      620,
-      0.07,
-      "sine",
-      0.022
-    );
-
-    const burst =
-      this.add.circle(
-        crystal.x,
-        crystal.y,
-        4,
-        0xd9ff5f,
-        0.8
-      )
-      .setDepth(20);
-
-    this.tweens.add({
-      targets:
-        burst,
-
-      scale:
-        7,
-
-      alpha:
-        0,
-
-      duration:
-        260,
-
-      onComplete:
-        () =>
-          burst.destroy()
-    });
-  }
-
-  // ============================================================
-  // PLAYER DAMAGE
-  // ============================================================
-
-  damagePlayer() {
-
-    if (
-      performance.now() <
-      this.invulnerableUntil
-    ) {
-
-      return;
+                shard.setAlpha(
+                    shard.timeline ===
+                        this.timeline
+                        ? 1
+                        : 0.15
+                );
+            }
+        );
     }
 
-    this.invulnerableUntil =
-      performance.now() +
-      1200;
+    // ======================================================
+    // SHOOTING
+    // ======================================================
 
-    this.health--;
-
-    this.player.setVelocityY(
-      -310
-    );
-
-    this.player.setTint(
-      0xff5578
-    );
-
-    this.cameras.main.shake(
-      220,
-      0.014
-    );
-
-    this.tone(
-      80,
-      0.16,
-      "sawtooth",
-      0.035
-    );
-
-    if (
-      this.health <= 0
-    ) {
-
-      this.scene.start(
-        "GameOverScene",
-        {
-          score:
-            this.score,
-
-          collected:
-            this.collected,
-
-          time:
-            this.elapsed()
+    shoot() {
+        if (
+            this.gameOverState ||
+            this.time.now - this.lastShot <
+                180
+        ) {
+            return;
         }
-      );
 
-      return;
+        this.lastShot = this.time.now;
+
+        const pointer =
+            this.input.activePointer;
+
+        let direction = this.player.flipX
+            ? -1
+            : 1;
+
+        if (pointer) {
+            const worldPoint =
+                this.cameras.main.getWorldPoint(
+                    pointer.x,
+                    pointer.y
+                );
+
+            direction =
+                worldPoint.x >= this.player.x
+                    ? 1
+                    : -1;
+        }
+
+        const bullet =
+            this.bullets.get(
+                this.player.x +
+                    direction * 30,
+                this.player.y - 5,
+                "bullet"
+            );
+
+        if (!bullet) {
+            return;
+        }
+
+        bullet.setActive(true);
+        bullet.setVisible(true);
+
+        bullet.body.enable = true;
+
+        bullet.setVelocityX(
+            direction * 700
+        );
+
+        bullet.setVelocityY(0);
+
+        bullet.setData(
+            "damage",
+            25
+        );
+
+        bullet.setData(
+            "timeline",
+            this.timeline
+        );
+
+        bullet.setTint(
+            this.timeline === "PRIME"
+                ? 0x53d8ff
+                : 0xff5fd7
+        );
+
+        this.time.delayedCall(
+            1200,
+            () => {
+                if (bullet.active) {
+                    this.destroyBullet(
+                        bullet
+                    );
+                }
+            }
+        );
     }
 
-    this.time.delayedCall(
-      300,
-      () => {
+    destroyBullet(bullet) {
+        if (!bullet) {
+            return;
+        }
+
+        bullet.setActive(false);
+        bullet.setVisible(false);
+
+        if (bullet.body) {
+            bullet.body.stop();
+            bullet.body.enable = false;
+        }
+    }
+
+    // ======================================================
+    // ENEMIES
+    // ======================================================
+
+    createEnemies() {
+        const enemyData = [
+            {
+                x: 700,
+                y: 420,
+                timeline: "PRIME"
+            },
+            {
+                x: 1200,
+                y: 520,
+                timeline: "ECHO"
+            },
+            {
+                x: 1850,
+                y: 380,
+                timeline: "PRIME"
+            },
+            {
+                x: 2350,
+                y: 470,
+                timeline: "ECHO"
+            },
+            {
+                x: 2850,
+                y: 490,
+                timeline: "PRIME"
+            },
+            {
+                x: 3350,
+                y: 400,
+                timeline: "ECHO"
+            },
+            {
+                x: 4000,
+                y: 300,
+                timeline: "PRIME"
+            }
+        ];
+
+        enemyData.forEach(data => {
+            this.createEnemy(
+                data.x,
+                data.y,
+                data.timeline
+            );
+        });
+    }
+
+    createEnemy(
+        x,
+        y,
+        timeline
+    ) {
+        const enemy =
+            this.physics.add.sprite(
+                x,
+                y,
+                "enemy"
+            );
+
+        enemy.setScale(0.8);
+
+        enemy.timeline = timeline;
+
+        enemy.maxHealth = 100;
+        enemy.health = 100;
+
+        enemy.state = "PATROL";
+
+        enemy.speed = 80;
+
+        enemy.direction = 1;
+
+        enemy.patrolStart = x - 120;
+        enemy.patrolEnd = x + 120;
+
+        enemy.lastShot = 0;
+
+        enemy.setCollideWorldBounds(
+            true
+        );
+
+        enemy.body.setSize(40, 30);
+
+        enemy.setTint(
+            timeline === "PRIME"
+                ? 0x53d8ff
+                : 0xff5fd7
+        );
+
+        if (
+            timeline !== this.timeline
+        ) {
+            enemy.setAlpha(0.15);
+        }
+
+        this.enemies.add(enemy);
+
+        return enemy;
+    }
+
+    updateEnemies() {
+        if (!this.enemies) {
+            return;
+        }
+
+        this.enemies.children.iterate(
+            enemy => {
+                if (
+                    !enemy ||
+                    !enemy.active
+                ) {
+                    return;
+                }
+
+                // Different timeline
+                if (
+                    enemy.timeline !==
+                    this.timeline
+                ) {
+                    enemy.setVelocityX(0);
+
+                    enemy.state =
+                        "PHASED";
+
+                    return;
+                }
+
+                enemy.setAlpha(1);
+
+                const distance =
+                    Phaser.Math.Distance.Between(
+                        enemy.x,
+                        enemy.y,
+                        this.player.x,
+                        this.player.y
+                    );
+
+                // ------------------------------------------
+                // PATROL
+                // ------------------------------------------
+
+                if (
+                    distance > 420
+                ) {
+                    enemy.state =
+                        "PATROL";
+
+                    enemy.setVelocityX(
+                        enemy.direction *
+                            enemy.speed
+                    );
+
+                    if (
+                        enemy.x <=
+                        enemy.patrolStart
+                    ) {
+                        enemy.direction = 1;
+                        enemy.setFlipX(false);
+                    }
+
+                    if (
+                        enemy.x >=
+                        enemy.patrolEnd
+                    ) {
+                        enemy.direction = -1;
+                        enemy.setFlipX(true);
+                    }
+
+                    return;
+                }
+
+                // ------------------------------------------
+                // CHASE
+                // ------------------------------------------
+
+                if (
+                    distance > 220
+                ) {
+                    enemy.state =
+                        "CHASE";
+
+                    const direction =
+                        this.player.x >
+                        enemy.x
+                            ? 1
+                            : -1;
+
+                    enemy.setVelocityX(
+                        direction * 140
+                    );
+
+                    enemy.setFlipX(
+                        direction < 0
+                    );
+
+                    return;
+                }
+
+                // ------------------------------------------
+                // ATTACK
+                // ------------------------------------------
+
+                enemy.state =
+                    "ATTACK";
+
+                enemy.setVelocityX(0);
+
+                const direction =
+                    this.player.x >
+                    enemy.x
+                        ? 1
+                        : -1;
+
+                enemy.setFlipX(
+                    direction < 0
+                );
+
+                if (
+                    this.time.now -
+                        enemy.lastShot >
+                    1000
+                ) {
+                    this.enemyShoot(
+                        enemy,
+                        direction
+                    );
+
+                    enemy.lastShot =
+                        this.time.now;
+                }
+            }
+        );
+    }
+
+    enemyShoot(
+        enemy,
+        direction
+    ) {
+        const bullet =
+            this.enemyBullets.get(
+                enemy.x +
+                    direction * 25,
+                enemy.y,
+                "enemyBullet"
+            );
+
+        if (!bullet) {
+            return;
+        }
+
+        bullet.setActive(true);
+        bullet.setVisible(true);
+
+        bullet.body.enable = true;
+
+        bullet.setVelocityX(
+            direction * 330
+        );
+
+        bullet.setVelocityY(0);
+
+        bullet.setTint(
+            enemy.timeline ===
+                "PRIME"
+                ? 0x70e5ff
+                : 0xff73dc
+        );
+
+        this.time.delayedCall(
+            1800,
+            () => {
+                if (bullet.active) {
+                    this.destroyBullet(
+                        bullet
+                    );
+                }
+            }
+        );
+    }
+
+    hitEnemy(
+        bullet,
+        enemy
+    ) {
+        if (
+            !bullet.active ||
+            !enemy.active
+        ) {
+            return;
+        }
+
+        if (
+            enemy.timeline !==
+            this.timeline
+        ) {
+            return;
+        }
+
+        const damage =
+            bullet.getData(
+                "damage"
+            ) || 25;
+
+        enemy.health -= damage;
+
+        this.destroyBullet(
+            bullet
+        );
+
+        this.enemyHitEffect(
+            enemy
+        );
+
+        if (
+            enemy.health <= 0
+        ) {
+            this.destroyEnemy(
+                enemy
+            );
+        }
+    }
+
+    enemyHitEffect(enemy) {
+        const ring =
+            this.add.circle(
+                enemy.x,
+                enemy.y,
+                15,
+                0xffffff,
+                0.7
+            );
+
+        this.tweens.add({
+            targets: ring,
+            radius: 35,
+            alpha: 0,
+            duration: 250,
+            onComplete: () => {
+                ring.destroy();
+            }
+        });
+
+        enemy.setTint(0xffffff);
+
+        this.time.delayedCall(
+            100,
+            () => {
+                if (
+                    enemy.active
+                ) {
+                    enemy.setTint(
+                        enemy.timeline ===
+                            "PRIME"
+                            ? 0x53d8ff
+                            : 0xff5fd7
+                    );
+                }
+            }
+        );
+    }
+
+    destroyEnemy(enemy) {
+        this.score += 100;
+
+        const explosion =
+            this.add.circle(
+                enemy.x,
+                enemy.y,
+                10,
+                enemy.timeline ===
+                    "PRIME"
+                    ? 0x53d8ff
+                    : 0xff5fd7,
+                0.8
+            );
+
+        this.tweens.add({
+            targets: explosion,
+            radius: 55,
+            alpha: 0,
+            duration: 450,
+            onComplete: () => {
+                explosion.destroy();
+            }
+        });
+
+        this.cameras.main.shake(
+            100,
+            0.004
+        );
+
+        enemy.disableBody(
+            true,
+            true
+        );
+
+        this.updateHUD();
+    }
+
+    enemyContact(
+        player,
+        enemy
+    ) {
+        if (
+            enemy.timeline !==
+            this.timeline
+        ) {
+            return;
+        }
+
+        if (
+            this.time.now -
+                (enemy.lastDamage || 0) <
+            700
+        ) {
+            return;
+        }
+
+        enemy.lastDamage =
+            this.time.now;
+
+        this.damagePlayer(
+            15
+        );
+    }
+
+    // ======================================================
+    // PLAYER DAMAGE
+    // ======================================================
+
+    hitPlayer(
+        player,
+        bullet
+    ) {
+        if (
+            !bullet.active
+        ) {
+            return;
+        }
+
+        this.destroyBullet(
+            bullet
+        );
+
+        this.damagePlayer(
+            10
+        );
+    }
+
+    damagePlayer(
+        amount
+    ) {
+        if (
+            this.gameOverState
+        ) {
+            return;
+        }
+
+        this.health -= amount;
+
+        this.health =
+            Math.max(
+                0,
+                this.health
+            );
 
         this.player.setTint(
-          this.timeline === "prime"
-            ? 0xd9ff5f
-            : 0x8ef2ff
+            0xff5555
         );
-      }
-    );
-  }
 
-  // ============================================================
-  // EXIT
-  // ============================================================
+        this.cameras.main.shake(
+            180,
+            0.008
+        );
 
-  createExit() {
+        this.time.delayedCall(
+            150,
+            () => {
+                if (
+                    this.player.active
+                ) {
+                    this.player.clearTint();
+                }
+            }
+        );
 
-    this.exit =
-      this.physics.add.staticImage(
-        4100,
-        532,
-        "exit"
-      )
-      .setDepth(5);
+        this.updateHUD();
 
-    this.exitGlow =
-      this.add.circle(
-        4100,
-        532,
-        68,
-        0x65f4d3,
-        0.025
-      )
-      .setDepth(1);
+        if (
+            this.health <= 0
+        ) {
+            this.gameOver();
+        }
+    }
 
-    this.tweens.add({
-      targets:
-        this.exitGlow,
+    // ======================================================
+    // SHARDS
+    // ======================================================
 
-      scale:
-        1.35,
+    createShards() {
+        const shardData = [
+            [600, 500, "PRIME"],
+            [1050, 410, "ECHO"],
+            [1450, 520, "PRIME"],
+            [1800, 370, "ECHO"],
+            [2200, 460, "PRIME"],
+            [2650, 340, "ECHO"],
+            [3100, 500, "PRIME"],
+            [3600, 410, "ECHO"],
+            [4050, 300, "PRIME"]
+        ];
 
-      alpha:
-        0.06,
+        shardData.forEach(
+            ([x, y, timeline]) => {
+                const shard =
+                    this.add.star(
+                        x,
+                        y,
+                        6,
+                        6,
+                        14,
+                        0x7cecff
+                    );
 
-      duration:
-        1100,
+                shard.timeline =
+                    timeline;
 
-      yoyo:
-        true,
+                shard.setTint(
+                    timeline === "PRIME"
+                        ? 0x53d8ff
+                        : 0xff5fd7
+                );
 
-      repeat:
-        -1
-    });
+                this.physics.add.existing(
+                    shard
+                );
 
-    this.physics.add.overlap(
-      this.player,
-      this.exit,
-      () =>
-        this.finishLevel(),
-      null,
-      this
-    );
-  }
+                shard.body.setAllowGravity(
+                    false
+                );
 
-  finishLevel() {
+                this.shardsGroup.add(
+                    shard
+                );
 
-    const bonus =
-      Math.max(
-        0,
-        1000 -
-          Math.floor(
-            this.elapsed() / 10
-          )
-      );
+                if (
+                    timeline !==
+                    this.timeline
+                ) {
+                    shard.setAlpha(0.15);
+                }
+            }
+        );
+    }
 
-    this.score +=
-      bonus;
+    collectShard(
+        player,
+        shard
+    ) {
+        if (
+            shard.timeline !==
+            this.timeline
+        ) {
+            return;
+        }
 
-    this.tone(
-      440,
-           0.1,
-      "triangle",
-      0.025
-    );
+        shard.disableBody(
+            true,
+            true
+        );
 
-    this.tone(
-      660,
-      0.2,
-      "triangle",
-      0.025
-    );
+        this.shards++;
 
-    this.scene.start(
-      "GameOverScene",
-      {
-        score:
-          this.score,
+        this.score += 50;
 
-        collected:
-          this.collected,
+        this.energy =
+            Math.min(
+                100,
+                this.energy + 10
+            );
 
-        time:
-          this.elapsed(),
+        const burst =
+            this.add.circle(
+                shard.x,
+                shard.y,
+                8,
+                shard.timeline ===
+                    "PRIME"
+                    ? 0x53d8ff
+                    : 0xff5fd7,
+                0.8
+            );
 
-        victory:
-          true
-      }
-    );
-  }
+        this.tweens.add({
+            targets: burst,
+            radius: 35,
+            alpha: 0,
+            duration: 350,
+            onComplete: () => {
+                burst.destroy();
+            }
+        });
 
-  // ============================================================
-  // HUD UPDATE
-  // ============================================================
+        this.updateHUD();
+    }
 
-  updateHUD() {
+    // ======================================================
+    // EXTRACTION
+    // ======================================================
 
-    this.scoreText.setText(
-      String(
-        this.score
-      ).padStart(
-        5,
-        "0"
-      )
-    );
+    createExtraction() {
+        this.extraction = this.add.rectangle(
+            4700,
+            560,
+            90,
+            160,
+            0x53d8ff,
+            0.2
+        );
 
-    this.healthText.setText(
-      "● ".repeat(
-        this.health
-      ).trim() +
-      (
-        this.health <
-        this.maxHealth
-          ? "  " +
-            "○ ".repeat(
-              this.maxHealth -
-              this.health
-            ).trim()
-          : ""
-      )
-    );
+        this.extraction.setStrokeStyle(
+            4,
+            0x53d8ff
+        );
 
-    this.shardText.setText(
-      `SHARDS ${String(
-        this.collected
-      ).padStart(2, "0")}`
-    );
+        this.physics.add.existing(
+            this.extraction,
+            true
+        );
 
-    this.energyFill.setScale(
-      Math.max(
-        0.02,
-        this.energy /
-          this.maxEnergy
-      ),
-      1
-    );
+        this.extractionLabel =
+            this.add.text(
+                4700,
+                450,
+                "EXTRACTION",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "18px",
+                    color:
+                        "#53d8ff",
+                    fontStyle:
+                        "bold"
+                }
+            );
 
-    this.shiftFill.setScale(
-      Math.max(
-        0.02,
-        1 -
-          this.shiftCooldown /
-          950
-      ),
-      1
-    );
-  }
+        this.extractionLabel.setOrigin(
+            0.5
+        );
 
-  // ============================================================
-  // TIME
-  // ============================================================
+        this.physics.add.overlap(
+            this.player,
+            this.extraction,
+            this.reachExtraction,
+            null,
+            this
+        );
+    }
 
-  elapsed() {
+    reachExtraction() {
+        if (
+            this.gameOverState
+        ) {
+            return;
+        }
 
-    return Math.floor(
-      (
-        performance.now() -
-        this.levelStart
-      ) / 1000
-    );
-  }
+        this.victory();
+    }
+
+    // ======================================================
+    // HUD
+    // ======================================================
+
+    createHUD() {
+        this.hud = {};
+
+        this.hud.timeline =
+            this.add.text(
+                25,
+                20,
+                "PRIME TIMELINE",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "24px",
+                    fontStyle:
+                        "bold",
+                    color:
+                        "#53d8ff"
+                }
+            );
+
+        this.hud.health =
+            this.add.text(
+                25,
+                58,
+                "HP: 100 / 100",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "17px",
+                    color:
+                        "#ffffff"
+                }
+            );
+
+        this.hud.energy =
+            this.add.text(
+                25,
+                85,
+                "ENERGY: 100",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "17px",
+                    color:
+                        "#ffffff"
+                }
+            );
+
+        this.hud.score =
+            this.add.text(
+                25,
+                112,
+                "SCORE: 0",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "17px",
+                    color:
+                        "#ffffff"
+                }
+            );
+
+        this.hud.shards =
+            this.add.text(
+                25,
+                139,
+                "SHARDS: 0",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "17px",
+                    color:
+                        "#ffffff"
+                }
+            );
+
+        this.hud.controls =
+            this.add.text(
+                25,
+                675,
+                "A/D Move   W/↑ Jump   F / Click Shoot   E Shift Timeline",
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "14px",
+                    color:
+                        "#9ab4ca"
+                }
+            );
+
+        Object.values(
+            this.hud
+        ).forEach(
+            element => {
+                element.setScrollFactor(0);
+                element.setDepth(1000);
+            }
+        );
+    }
+
+    updateHUD() {
+        if (!this.hud) {
+            return;
+        }
+
+        this.hud.timeline.setText(
+            `${this.timeline} TIMELINE`
+        );
+
+        this.hud.timeline.setColor(
+            this.timeline === "PRIME"
+                ? "#53d8ff"
+                : "#ff5fd7"
+        );
+
+        this.hud.health.setText(
+            `HP: ${Math.ceil(
+                this.health
+            )} / ${this.maxHealth}`
+        );
+
+        this.hud.energy.setText(
+            `ENERGY: ${Math.ceil(
+                this.energy
+            )}`
+        );
+
+        this.hud.score.setText(
+            `SCORE: ${this.score}`
+        );
+
+        this.hud.shards.setText(
+            `SHARDS: ${this.shards}`
+        );
+    }
+
+    showTimelineMessage(
+        message,
+        color
+    ) {
+        const text =
+            this.add.text(
+                this.scale.width / 2,
+                100,
+                message,
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "32px",
+                    fontStyle:
+                        "bold",
+                    color:
+                        color,
+                    stroke:
+                        "#000000",
+                    strokeThickness:
+                        5
+                }
+            );
+
+        text.setOrigin(0.5);
+
+        text.setScrollFactor(0);
+
+        text.setDepth(2000);
+
+        this.tweens.add({
+            targets: text,
+            alpha: 0,
+            y: 70,
+            duration: 1000,
+            delay: 400,
+            onComplete: () => {
+                text.destroy();
+            }
+        });
+    }
+
+    // ======================================================
+    // RAIN
+    // ======================================================
+
+    createRain() {
+        this.rain = [];
+
+        for (
+            let i = 0;
+            i < 120;
+            i++
+        ) {
+            const x =
+                Phaser.Math.Between(
+                    0,
+                    5000
+                );
+
+            const y =
+                Phaser.Math.Between(
+                    0,
+                    720
+                );
+
+            const line =
+                this.add.line(
+                    x,
+                    y,
+                    0,
+                    0,
+                    0,
+                    14,
+                    0x6da9c9,
+                    0.35
+                );
+
+            line.setOrigin(0);
+
+            line.setScrollFactor(
+                Phaser.Math.FloatBetween(
+                    0.4,
+                    1
+                )
+            );
+
+            this.rain.push(line);
+        }
+    }
+
+    updateRain() {
+        if (!this.rain) {
+            return;
+        }
+
+        this.rain.forEach(
+            drop => {
+                drop.y += 9;
+
+                if (
+                    drop.y > 720
+                ) {
+                    drop.y = -20;
+                }
+            }
+        );
+    }
+
+    // ======================================================
+    // GAME OVER
+    // ======================================================
+
+    gameOver() {
+        if (
+            this.gameOverState
+        ) {
+            return;
+        }
+
+        this.gameOverState = true;
+
+        this.physics.pause();
+
+        this.showEndScreen(
+            "TIMELINE COLLAPSED",
+            "#ff5555",
+            "Press R to restart"
+        );
+    }
+
+    // ======================================================
+    // VICTORY
+    // ======================================================
+
+    victory() {
+        if (
+            this.gameOverState
+        ) {
+            return;
+        }
+
+        this.gameOverState = true;
+
+        this.physics.pause();
+
+        this.showEndScreen(
+            "EXTRACTION SUCCESSFUL",
+            "#53d8ff",
+            `Score: ${this.score}   Shards: ${this.shards}`
+        );
+    }
+
+    showEndScreen(
+        title,
+        color,
+        subtitle
+    ) {
+        const overlay =
+            this.add.rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2,
+                this.scale.width,
+                this.scale.height,
+                0x000000,
+                0.75
+            );
+
+        overlay.setScrollFactor(0);
+        overlay.setDepth(3000);
+
+        const titleText =
+            this.add.text(
+                this.scale.width / 2,
+                this.scale.height / 2 - 50,
+                title,
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "42px",
+                    fontStyle:
+                        "bold",
+                    color:
+                        color,
+                    stroke:
+                        "#000000",
+                    strokeThickness:
+                        6
+                }
+            );
+
+        titleText.setOrigin(0.5);
+
+        titleText.setScrollFactor(0);
+        titleText.setDepth(3001);
+
+        const subText =
+            this.add.text(
+                this.scale.width / 2,
+                this.scale.height / 2 + 20,
+                subtitle,
+                {
+                    fontFamily:
+                        "Arial",
+                    fontSize:
+                        "20px",
+                    color:
+                        "#ffffff"
+                }
+            );
+
+        subText.setOrigin(0.5);
+
+        subText.setScrollFactor(0);
+        subText.setDepth(3001);
+
+        this.input.keyboard.once(
+            "keydown-R",
+            () => {
+                this.scene.restart();
+            }
+        );
+    }
+
+    // ======================================================
+    // UPDATE
+    // ======================================================
+
+    update() {
+        if (
+            this.gameOverState
+        ) {
+            return;
+        }
+
+        this.updatePlayer();
+        this.updateEnemies();
+        this.updateRain();
+
+        // Slowly regenerate energy
+        if (
+            this.time.now % 30 < 1
+        ) {
+            this.energy =
+                Math.min(
+                    100,
+                    this.energy + 1
+                );
+
+            this.updateHUD();
+        }
+
+        // Keep extraction animated
+        if (
+            this.extraction
+        ) {
+            this.extraction.setAlpha(
+                0.15 +
+                    Math.sin(
+                        this.time.now /
+                            250
+                    ) *
+                        0.1
+            );
+        }
+
+        // Rotate shards
+        if (
+            this.shardsGroup
+        ) {
+            this.shardsGroup.children.iterate(
+                shard => {
+                    if (
+                        shard &&
+                        shard.active
+                    ) {
+                        shard.rotation +=
+                            0.04;
+                    }
+                }
+            );
+        }
+    }
 }
